@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>スタッフ用 ガチャ管理</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;background:#f4f5f9;color:#222}
+.wrap{max-width:480px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:8px 0 14px}
+.box{background:#fff;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+h2{font-size:15px;margin:0 0 10px}
+input{width:100%;padding:12px;border:1px solid #ccd;border-radius:10px;font-size:16px;margin-bottom:10px}
+button{width:100%;padding:14px;border:0;border-radius:10px;font-size:16px;font-weight:700;background:#5b5bd6;color:#fff}
+button.sub{background:#e04f8a}
+button:disabled{opacity:.5}
+#qr{display:flex;justify-content:center;margin:12px 0}
+.small{font-size:12px;color:#666;word-break:break-all}
+.res{margin-top:10px;font-weight:700}
+.ok{color:#1b8a3a}.ng{color:#c62828}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>スタッフ用 ガチャ管理</h1>
+
+  <div class="box" id="login">
+    <h2>ログイン</h2>
+    <input id="staff" placeholder="担当者名">
+    <input id="pass" type="password" placeholder="スタッフ用パスワード">
+    <button id="loginBtn">開始</button>
+  </div>
+
+  <div id="main" hidden>
+    <div class="box">
+      <h2>① ガチャチケットを発行（会計時）</h2>
+      <button id="issueBtn">チケットを1枚発行する</button>
+      <div id="qr"></div>
+      <div class="small" id="url"></div>
+      <div class="res" id="issueRes"></div>
+    </div>
+
+    <div class="box">
+      <h2>② 当選チケットの確認・引換</h2>
+      <input id="prizeCode" placeholder="お客様の引換コード" autocapitalize="characters">
+      <button class="sub" id="lookupBtn">確認する</button>
+      <button id="redeemBtn" style="margin-top:8px" hidden>使用済みにする</button>
+      <div class="res" id="prizeRes"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const CONFIG = {
+  GAS_URL: '',  // GASウェブアプリのURL
+  LIFF_ID: ''   // LIFF ID（お客様側のガチャ画面を開くURLを作るために使用）
+};
+const $ = id => document.getElementById(id);
+const ERR = { auth: 'パスワードが違います', not_found: 'コードが見つかりません', already_used: 'すでに使用済みです', expired: '有効期限切れです' };
+let staff = '', pass = '';
+
+async function api(body) {
+  if (!CONFIG.GAS_URL) return { ok: false, error: 'demo' };
+  const r = await fetch(CONFIG.GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(Object.assign({ pass, staff }, body)) });
+  return r.json();
+}
+
+$('loginBtn').onclick = () => {
+  staff = $('staff').value.trim(); pass = $('pass').value;
+  if (!staff || !pass) return;
+  $('login').hidden = true; $('main').hidden = false;
+};
+
+$('issueBtn').onclick = async () => {
+  $('issueRes').textContent = '';
+  let code;
+  if (!CONFIG.GAS_URL) { code = 'DEMO' + Math.random().toString(36).slice(2, 14).toUpperCase().padEnd(12, 'X'); }
+  else {
+    const r = await api({ action: 'issue' });
+    if (!r.ok) { $('issueRes').className = 'res ng'; $('issueRes').textContent = ERR[r.error] || 'エラー'; return; }
+    code = r.code;
+  }
+  const base = CONFIG.LIFF_ID ? 'https://liff.line.me/' + CONFIG.LIFF_ID : location.origin + location.pathname.replace('staff.html', 'gacha.html');
+  const url = base + '?t=' + code;
+  $('qr').innerHTML = '';
+  new QRCode($('qr'), { text: url, width: 220, height: 220 });
+  $('url').textContent = url;
+  $('issueRes').className = 'res ok';
+  $('issueRes').textContent = '発行しました（お客様にQRを読み取っていただいてください）';
+};
+
+let currentPrize = '';
+$('lookupBtn').onclick = async () => {
+  currentPrize = $('prizeCode').value.trim().toUpperCase();
+  $('redeemBtn').hidden = true;
+  const r = await api({ action: 'lookup', prizeCode: currentPrize });
+  const el = $('prizeRes');
+  if (!r.ok) { el.className = 'res ng'; el.textContent = ERR[r.error] || 'エラー（デモ表示ではサーバー未接続です）'; return; }
+  if (r.used) { el.className = 'res ng'; el.textContent = (r.label || r.type) + '：使用済み'; return; }
+  if (r.expired) { el.className = 'res ng'; el.textContent = (r.label || r.type) + '：期限切れ'; return; }
+  el.className = 'res ok';
+  el.textContent = (r.label || r.type) + '：有効（' + new Date(r.expiresAt).toLocaleDateString('ja-JP') + 'まで）';
+  $('redeemBtn').hidden = false;
+};
+
+$('redeemBtn').onclick = async () => {
+  const r = await api({ action: 'redeem', prizeCode: currentPrize });
+  const el = $('prizeRes');
+  if (r.ok) { el.className = 'res ok'; el.textContent = '使用済みにしました'; $('redeemBtn').hidden = true; }
+  else { el.className = 'res ng'; el.textContent = ERR[r.error] || 'エラー'; }
+};
+</script>
+</body>
+</html>
